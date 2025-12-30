@@ -1,3 +1,47 @@
+apache-pulsar (4.1.2-9) unstable; urgency=medium
+
+  * Fixed debian/rules: converted all scripts line endings from CRLF to LF for
+    proper execution in Linux containers. Added automatic line ending conversion
+    for all scripts in debian/tmp/pulsar/bin directory
+  * Fixed debian/rules: added symlink resolution fix for pulsar-admin and
+    pulsar-client scripts. Scripts now correctly resolve PULSAR_HOME when called
+    from /usr/bin symlinks using the same method as pulsar-shell
+  * Fixed debian/rules: added pulsar-admin-common.sh to copied files list.
+    This file is required by pulsar-admin and pulsar-client commands
+  * Fixed debian/source/format: changed from 3.0 (quilt) to 3.0 (native) and
+    created debian/patches directory structure for proper source package format
+  * Updated .gitattributes: added rule for all debian/** files to use LF line
+    endings, preventing Windows line ending issues in Linux builds
+  * Fixed docker/deb/test/Dockerfile: improved command testing with proper error
+    handling. Commands no longer cause test script to exit on expected errors
+    (exit code 1 for usage display)
+  * Updated docker/deb/test/Dockerfile: added comprehensive standalone Pulsar
+    startup test. Test verifies HTTP API, broker port, and pulsar-admin
+    functionality with real running instance
+  * Updated docker/deb/test/Dockerfile: added curl dependency for HTTP API testing
+    and improved Java version detection in test output
+
+ -- HelgiSaga <bglegb@gmail.com>  Thu, 30 Dec 2025 18:00:00 +0300
+
+apache-pulsar (4.1.2-8) unstable; urgency=medium
+
+  * Fixed debian/rules: only main apache-pulsar.service is installed automatically
+    via dh_installsystemd. Additional services (bookie, proxy, functions-worker,
+    websocket, autorecovery) are installed as examples in
+    /usr/share/apache-pulsar/examples/systemd/ for manual activation
+  * Updated debian/control: changed Java dependency to support both Java 21 and 17
+    (openjdk-21-jre-headless | openjdk-17-jre-headless) for compatibility with
+    Debian Trixie and older versions
+  * Fixed debian/rules: added override_dh_installdeb and override_dh_builddeb
+    to ensure postinst script is properly packaged. The script creates system
+    user apache-pulsar, sets directory permissions, and creates log directory
+  * Updated debian/install: added installation of additional systemd service files
+    as examples in /usr/share/apache-pulsar/examples/systemd/
+  * Updated debian/README: documented current package structure, maintainer scripts
+    handling, and systemd services installation approach
+
+ -- HelgiSaga <bglegb@gmail.com>  Sun, 25 Dec 2025 18:00:00 +0300
+
 apache-pulsar (4.1.2-7) unstable; urgency=medium
 
   * Fixed debian/rules: corrected dh_installsystemd usage for multiple service
@@ -77,10 +121,10 @@ apache-pulsar (4.1.2-2) unstable; urgency=medium
   * Added build dependencies for Java, Maven, NodeJS, Yarn.
   * Deleted file debian/compat.
 
- -- HelgiSaga <bglegb@gmail.com>  Sun, 09 Nov 2025 12:00:00 +0300
+ -- HelgiSaga <bglegb@gmail.com>  Sun, 9 Nov 2025 12:00:00 +0300
 
 apache-pulsar (4.1.2-1) unstable; urgency=medium
 
   * Initial release of Apache Pulsar deb package.
 
- -- HelgiSaga <bglegb@gmail.com>  Sat, 08 Nov 2025 16:00:00 +0300
+ -- HelgiSaga <bglegb@gmail.com>  Sat, 8 Nov 2025 16:00:00 +0300

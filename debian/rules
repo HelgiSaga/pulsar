@@ -6,85 +6,120 @@ export JAVA_HOME=/usr/lib/jvm/default-java
 	dh $@
 
 override_dh_auto_build:
-	# Собираем все основные модули Pulsar (core-modules профиль)
-	# Это включает: broker, proxy, websocket, functions-worker и все зависимости
-	# Используем -Pcore-modules,-main для сборки только основных модулей без внешних коннекторов
-	mvn -T 1C -Pcore-modules,-main clean install -DskipTests -Dlicense.skip=true
+	# Build Pulsar distribution package (distribution/server module)
+	# This creates a complete distribution layout with all necessary JARs and dependencies
+	# Using -pl distribution/server to build only the server distribution module
+	# Using -am to also build all required dependencies
+	# Using -Dtest.skip=true to completely skip test compilation (not just execution)
+	mvn -T 1C -pl distribution/server -am clean package -DskipTests -Dtest.skip=true -DskipITs -Dlicense.skip=true
 
 override_dh_auto_install:
-	# Создаем структуру директорий в tmp
-	mkdir -p debian/tmp/pulsar/java
-	mkdir -p debian/tmp/pulsar/conf
-	mkdir -p debian/tmp/pulsar/bin
-	mkdir -p debian/tmp/pulsar/bin/proto
-	mkdir -p debian/tmp/usr/bin
+	# Find the distribution archive (created during build phase)
+	ARCHIVE=$$(ls distribution/server/target/apache-pulsar-*.tar.gz 2>/dev/null | head -1); \
+	if [ -z "$$ARCHIVE" ]; then \
+		echo "ERROR: Distribution archive not found. Make sure build completed successfully."; \
+		echo "Expected: distribution/server/target/apache-pulsar-*.tar.gz"; \
+		echo "Checking target directory:"; \
+		ls -la distribution/server/target/ 2>/dev/null || echo "Target directory does not exist"; \
+		exit 1; \
+	fi; \
+	echo "Using distribution archive: $$ARCHIVE"; \
+	TMPDIR=$$(mktemp -d); \
+	echo "Temporary extraction directory: $$TMPDIR"; \
+	if [ ! -f "$$ARCHIVE" ]; then \
+		echo "ERROR: Archive file does not exist: $$ARCHIVE"; \
+		rm -rf "$$TMPDIR"; \
+		exit 1; \
+	fi; \
+	tar -xzf "$$ARCHIVE" -C "$$TMPDIR" || { echo "ERROR: Failed to extract archive"; rm -rf "$$TMPDIR"; exit 1; }; \
+	EXTRACTED_DIR=$$(ls -d "$$TMPDIR"/apache-pulsar-*/ 2>/dev/null | head -1); \
+	if [ -z "$$EXTRACTED_DIR" ]; then \
+		echo "ERROR: Failed to find extracted directory."; \
+		echo "Contents of $$TMPDIR:"; \
+		ls -la "$$TMPDIR" || true; \
+		rm -rf "$$TMPDIR"; \
+		exit 1; \
+	fi; \
+	echo "Extracted distribution directory: $$EXTRACTED_DIR"; \
+	# Copy the entire distribution layout to debian/tmp/pulsar
+	mkdir -p debian/tmp/pulsar debian/tmp/etc/apache-pulsar; \
 
-	# Копируем jar-файлы
-	# Скрипт pulsar ищет pulsar-*.jar в корне PULSAR_HOME или pulsar-broker/target/pulsar-*.jar
-	# Копируем основной jar файл broker в корень (как ожидает скрипт)
-	cp pulsar-broker/target/pulsar-broker*.jar debian/tmp/pulsar/java/ 2>/dev/null || true
-	
-	# Также копируем все jar файлы зависимостей в lib директорию
-	# Это нужно для правильной работы classpath всех компонентов (broker, proxy, websocket, functions-worker)
-	mkdir -p debian/tmp/pulsar/lib
-	# Копируем jar файлы из всех модулей (исключая тестовые, исходники и документацию)
-	find . -path "*/target/*.jar" ! -name "*tests.jar" ! -name "*sources.jar" ! -name "*javadoc.jar" ! -path "*/distribution/*" ! -path "*/tests/*" -exec cp {} debian/tmp/pulsar/lib/ \; 2>/dev/null || true
-	# Убираем бит исполнения со всех jar файлов (они не должны быть исполняемыми)
-	find debian/tmp/pulsar/lib -name "*.jar" -type f -exec chmod -x {} + 2>/dev/null || true
-	find debian/tmp/pulsar/java -name "*.jar" -type f -exec chmod -x {} + 2>/dev/null || true
-
-	# Копируем конфиги
-	cp -r conf/* debian/tmp/pulsar/conf
-
-	# Удаляем бит исполнения на конфиги и XML/YML файлы
-	find debian/tmp/pulsar/conf -name "*.conf" -type f -exec chmod -x {} + || true
-	find debian/tmp/pulsar/conf -name "*.xml" -type f -exec chmod -x {} + || true
-	find debian/tmp/pulsar/conf -name "*.yml" -type f -exec chmod -x {} + || true
-	find debian/tmp/pulsar/conf -name "*.json" -type f -exec chmod -x {} + || true
-	find debian/tmp/pulsar/conf -name "*.ini" -type f -exec chmod -x {} + || true
-	find debian/tmp/pulsar/conf -name "*.yaml" -type f -exec chmod -x {} + || true
-
-	# Копируем скрипты
-	cp bin/pulsar debian/tmp/pulsar/bin
-	cp bin/bookkeeper debian/tmp/pulsar/bin
-	cp bin/function-localrunner debian/tmp/pulsar/bin
-	cp bin/pulsar-admin debian/tmp/pulsar/bin
-	cp bin/pulsar-client debian/tmp/pulsar/bin
-	cp bin/pulsar-daemon debian/tmp/pulsar/bin
-	cp bin/pulsar-managed-ledger-admin debian/tmp/pulsar/bin
-	cp bin/pulsar-perf debian/tmp/pulsar/bin
-	cp bin/pulsar-shell debian/tmp/pulsar/bin
-
-	# Копируем proto
-	cp bin/proto/MLDataFormats_pb2.py debian/tmp/pulsar/bin/proto
-
-	# Создаем символические ссылки для основных команд в /usr/bin
-	ln -sf /usr/lib/apache-pulsar/bin/pulsar debian/tmp/usr/bin/pulsar
-	ln -sf /usr/lib/apache-pulsar/bin/pulsar-admin debian/tmp/usr/bin/pulsar-admin
-	ln -sf /usr/lib/apache-pulsar/bin/pulsar-client debian/tmp/usr/bin/pulsar-client
-	ln -sf /usr/lib/apache-pulsar/bin/pulsar-perf debian/tmp/usr/bin/pulsar-perf
+	# Copy using find to explicitly exclude problematic filesystems, VCS files, and project directories
+	# This avoids issues with /proc, /sys, /dev, .git directories, and our own debian/ directory
+	DEST_DIR=$$(pwd)/debian/tmp/pulsar; \
+	(cd "$$EXTRACTED_DIR" && find . -mindepth 1 -maxdepth 1 ! -name proc ! -name sys ! -name dev ! -name debian ! -name .git -exec cp -a {} "$$DEST_DIR/" \;); \
+	# Remove VCS files (.gitattributes, .gitignore) that might be in subdirectories
+	find "$$DEST_DIR" -name ".gitattributes" -type f -delete 2>/dev/null || true; \
+	find "$$DEST_DIR" -name ".gitignore" -type f -delete 2>/dev/null || true; \
+	find "$$DEST_DIR" -name ".git" -type d -exec rm -rf {} + 2>/dev/null || true; \
+	# Clean up temporary directory
+	rm -rf "$$TMPDIR"; \
+	# Move conf directory to /etc/apache-pulsar (Debian policy)
+	# Create symlink from PULSAR_HOME/conf to /etc/apache-pulsar for compatibility
+	if [ -d "debian/tmp/pulsar/conf" ]; then \
+		mv debian/tmp/pulsar/conf debian/tmp/etc/apache-pulsar/; \
+		ln -sf /etc/apache-pulsar debian/tmp/pulsar/conf; \
+	fi; \
+	# Remove execute bits from all JAR files (they should not be executable)
+	find debian/tmp/pulsar -name "*.jar" -type f -exec chmod -x {} + 2>/dev/null || true; \
+	# Fix line endings from CRLF to LF for all scripts (fix Windows line endings)
+	find debian/tmp/pulsar/bin -type f -exec sed -i 's/\r$$//' {} + 2>/dev/null || true; \
+	# Fix pulsar-admin and pulsar-client scripts to correctly resolve PULSAR_HOME
+	# Insert symlink resolution code before BINDIR line (same approach as pulsar-shell)
+	for script in pulsar-admin pulsar-client; do \
+		file="debian/tmp/pulsar/bin/$$script"; \
+		if [ -f "$$file" ]; then \
+			sed -i '/^BINDIR=/i\
+# need this for relative symlinks\
+PRG="$$0"\
+while [ -h "$$PRG" ]; do\
+  link=$$(readlink "$$PRG");\
+  case "$$link" in /*) PRG="$$link" ;; *) PRG="$$(dirname "$$PRG")/$$link" ;; esac;\
+done\
+' "$$file"; \
+			sed -i 's|^BINDIR=$$(dirname "$$0")|BINDIR=$$(dirname "$$PRG")|' "$$file"; \
+		fi; \
+	done; \
+	# Create directory for symlinks
+	mkdir -p debian/tmp/usr/bin; \
+	# Create symbolic links for main commands in /usr/bin
+	ln -sf /usr/lib/apache-pulsar/bin/pulsar debian/tmp/usr/bin/pulsar; \
+	ln -sf /usr/lib/apache-pulsar/bin/pulsar-admin debian/tmp/usr/bin/pulsar-admin; \
+	ln -sf /usr/lib/apache-pulsar/bin/pulsar-client debian/tmp/usr/bin/pulsar-client; \
+	ln -sf /usr/lib/apache-pulsar/bin/pulsar-perf debian/tmp/usr/bin/pulsar-perf; \
 	ln -sf /usr/lib/apache-pulsar/bin/bookkeeper debian/tmp/usr/bin/bookkeeper
 
-	# dh_install и остальные debhelper команды будут работать
+	# Copy additional systemd service files as examples to /usr/share/apache-pulsar/examples/systemd/
+	# Users can copy them to /etc/systemd/system/ and enable if needed
+	mkdir -p debian/tmp/usr/share/apache-pulsar/examples/systemd
+	cp debian/apache-pulsar-bookie.service debian/tmp/usr/share/apache-pulsar/examples/systemd/
+	cp debian/apache-pulsar-proxy.service debian/tmp/usr/share/apache-pulsar/examples/systemd/
+	cp debian/apache-pulsar-functions-worker.service debian/tmp/usr/share/apache-pulsar/examples/systemd/
+	cp debian/apache-pulsar-websocket.service debian/tmp/usr/share/apache-pulsar/examples/systemd/
+	cp debian/apache-pulsar-autorecovery.service debian/tmp/usr/share/apache-pulsar/examples/systemd/
+
+	# dh_install and other debhelper commands will work
 
 override_dh_installsystemd:
-	# Устанавливаем основной сервис
+	# Install only the main apache-pulsar service (broker)
+	# Additional services (bookie, proxy, functions-worker, websocket, autorecovery)
+	# can be enabled manually if needed by copying service files to /etc/systemd/system/
+	# or by creating separate packages for them
 	dh_installsystemd --name=apache-pulsar
-	# Устанавливаем остальные сервисы
-	# dh_installsystemd автоматически создаст скрипты postinst/prerm для каждого
-	dh_installsystemd --name=apache-pulsar-bookie apache-pulsar-bookie.service
-	dh_installsystemd --name=apache-pulsar-proxy apache-pulsar-proxy.service
-	dh_installsystemd --name=apache-pulsar-functions-worker apache-pulsar-functions-worker.service
-	dh_installsystemd --name=apache-pulsar-websocket apache-pulsar-websocket.service
-	dh_installsystemd --name=apache-pulsar-autorecovery apache-pulsar-autorecovery.service
+
+override_dh_installdeb:
+	sed -i 's/\r$$//' debian/postinst debian/preinst debian/prerm debian/postrm 2>/dev/null || true
+	dh_installdeb
 
 override_dh_installman:
-	# Устанавливаем man страницы из debian/man/
+	# Install man pages from debian/man/
 	dh_installman debian/man/*.1
 
 override_dh_fixperms:
 	dh_fixperms
-	# Исправляем отсутствующие shebang только для скриптов без shebang
+	# Fix line endings in scripts (remove CRLF if present)
+	@find debian/apache-pulsar/usr/lib/apache-pulsar/bin -type f -exec sed -i 's/\r$$//' {} + 2>/dev/null || true
+	# Fix missing shebang only for scripts without shebang
 	@for file in debian/apache-pulsar/usr/lib/apache-pulsar/bin/*; do \
 		if [ -f "$$file" ] && file "$$file" | grep -q "text" && [ ! -x "$$file" ]; then \
 			if ! head -n1 "$$file" | grep -q "^#!"; then \
@@ -92,3 +127,4 @@ override_dh_fixperms:
 			fi; \
 		fi; \
 	done
+
